@@ -1,41 +1,38 @@
-# ---------- Build stage ----------
-FROM node:22-alpine AS builder
+# Stage 1: Build the Application
+# We use node:20 as the base for building and installing dependencies.
+FROM node:20 AS build
 
-WORKDIR /app
+# Set the working directory inside the container
+WORKDIR /usr/src/app
 
+# Copy package.json and package-lock.json first to leverage Docker caching.
+# If these files don't change, subsequent builds can skip 'npm install'.
 COPY package*.json ./
-RUN npm ci
 
+# Install dependencies
+RUN npm install
+
+# Copy the rest of the application source code
 COPY . .
-RUN npm run build
 
-# ---------- Production dependencies stage ----------
-FROM node:22-alpine AS deps
+# Stage 2: Create the Final Production Image
+# We use node:20 as the runtime image with all the necessary tools.
+FROM node:20
 
-WORKDIR /app
+# Set the working directory
+WORKDIR /usr/src/app
 
-COPY package*.json ./
-RUN npm ci --omit=dev
+# Copy the node_modules and built application files from the 'build' stage
+COPY --from=build /usr/src/app/node_modules ./node_modules
+COPY --from=build /usr/src/app/package*.json ./
+COPY --from=build /usr/src/app .
 
-# ---------- Runtime stage ----------
-FROM node:22-alpine AS runner
+# Expose the port your app runs on
+ENV PORT=8080
+EXPOSE $PORT
 
-WORKDIR /app
-ENV NODE_ENV=production
+# Run the application using the non-root user (recommended for security)
+USER node
 
-# Run as a non-root user (AWS/ECS best practice)
-RUN addgroup -g 1001 -S nodejs && adduser -S nestjs -u 1001
-
-COPY --from=deps /app/node_modules ./node_modules
-COPY --from=builder /app/dist ./dist
-COPY package*.json ./
-
-USER nestjs
-
-EXPOSE 3000
-
-# Used by ECS/ALB health checks
-HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
-  CMD node -e "require('http').get('http://localhost:3000/health', r => process.exit(r.statusCode===200?0:1)).on('error', () => process.exit(1))"
-
-CMD ["node", "dist/main.js"]
+# Define the command to start your application
+CMD [ "node", "index.js" ]
